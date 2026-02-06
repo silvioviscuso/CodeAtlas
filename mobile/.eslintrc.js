@@ -1,0 +1,13 @@
+module.exports = {
+  extends: ['expo', 'prettier'],
+  plugins: ['@typescript-eslint'],
+  parser: '@typescript-eslint/parser',
+  parserOptions: {
+    ecmaVersion: 2022,
+    sourceType: 'module',
+  },
+  rules: {
+    '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+    'no-console': ['warn', { allow: ['warn', 'error'] }],
+  },
+};

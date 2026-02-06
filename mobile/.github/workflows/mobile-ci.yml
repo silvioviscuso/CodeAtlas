@@ -1,0 +1,195 @@
+# Mobile App CI/CD Pipeline
+# Builds, tests, and deploys the React Native mobile app
+
+name: Mobile CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linting
+        run: npm run lint
+
+      - name: Type checking
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm test
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage/lcov.info
+          flags: mobile
+          name: mobile-coverage
+
+  build-android:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Expo CLI
+        run: npm install -g @expo/cli
+
+      - name: Install EAS CLI
+        run: npm install -g @expo/eas-cli
+
+      - name: Configure EAS
+        run: eas configure
+
+      - name: Build Android
+        run: eas build --platform android --profile preview
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: android-build
+          path: dist/
+
+  build-ios:
+    runs-on: macos-latest
+    needs: test
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Expo CLI
+        run: npm install -g @expo/cli
+
+      - name: Install EAS CLI
+        run: npm install -g @expo/eas-cli
+
+      - name: Configure EAS
+        run: eas configure
+
+      - name: Build iOS
+        run: eas build --platform ios --profile preview
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ios-build
+          path: dist/
+
+  deploy-android-staging:
+    runs-on: ubuntu-latest
+    needs: [test, build-android]
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Expo CLI
+        run: npm install -g @expo/cli
+
+      - name: Install EAS CLI
+        run: npm install -g @expo/eas-cli
+
+      - name: Submit to Google Play (Internal Test)
+        run: eas submit --platform android --track internal
+
+  deploy-ios-staging:
+    runs-on: macos-latest
+    needs: [test, build-ios]
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Expo CLI
+        run: npm install -g @expo/cli
+
+      - name: Install EAS CLI
+        run: npm install -g @expo/eas-cli
+
+      - name: Submit to TestFlight
+        run: eas submit --platform ios --distribution internal
+
+  deploy-android-production:
+    runs-on: ubuntu-latest
+    needs: [test, build-android]
+    if: github.ref == 'refs/heads/main'
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Expo CLI
+        run: npm install -g @expo/cli
+
+      - name: Install EAS CLI
+        run: npm install -g @expo/eas-cli
+
+      - name: Submit to Google Play (Production)
+        run: eas submit --platform android --track production
+
+  deploy-ios-production:
+    runs-on: macos-latest
+    needs: [test, build-ios]
+    if: github.ref == 'refs/heads/main'
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Expo CLI
+        run: npm install -g @expo/cli
+
+      - name: Install EAS CLI
+        run: npm install -g @expo/eas-cli
+
+      - name: Submit to App Store
+        run: eas submit --platform ios --distribution store
