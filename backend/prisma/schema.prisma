@@ -1,0 +1,207 @@
+// CodeAtlas Database Schema
+// Multi-tenant SaaS architecture with clear billing and auth boundaries
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Tenant represents a customer account (company/team)
+// This is the billing boundary for SaaS pricing
+model Tenant {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique // URL-friendly identifier
+  plan        String   @default("free") // free, pro, enterprise
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  users       User[]
+  repositories Repository[]
+  reviews     Review[]
+  subscriptions RepositorySubscription[]
+
+  @@index([slug])
+  @@map("tenants")
+}
+
+// User represents an authenticated person
+// Linked to GitHub account for SSO
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  name          String?
+  githubUserId  String?  @unique // GitHub user ID (numeric)
+  githubUsername String? // GitHub username
+  avatarUrl     String?
+  tenantId      String
+  role          String   @default("member") // owner, admin, member
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sessions      Session[]
+  reviewJobs    ReviewJob[]
+
+  @@index([tenantId])
+  @@index([githubUserId])
+  @@map("users")
+}
+
+// Session for JWT token management (optional, for token revocation)
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@map("sessions")
+}
+
+// Repository represents a GitHub repository being monitored
+model Repository {
+  id              String   @id @default(uuid())
+  tenantId        String
+  githubRepoId    Int      // GitHub repository ID (numeric)
+  owner           String   // GitHub owner (org or user)
+  name            String   // Repository name
+  fullName        String   // owner/name
+  defaultBranch   String   @default("main")
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pullRequests    PullRequest[]
+  subscriptions   RepositorySubscription[]
+
+  @@unique([tenantId, githubRepoId])
+  @@index([tenantId])
+  @@index([fullName])
+  @@map("repositories")
+}
+
+// RepositorySubscription links users to repos for notifications
+model RepositorySubscription {
+  id           String   @id @default(uuid())
+  tenantId     String
+  repositoryId String
+  userId       String
+  notifyOn     String[] // ["pr_opened", "review_completed", "high_severity"]
+  createdAt    DateTime @default(now())
+
+  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, repositoryId])
+  @@index([userId])
+  @@index([repositoryId])
+  @@map("repository_subscriptions")
+}
+
+// PullRequest represents a GitHub PR being reviewed
+model PullRequest {
+  id              String   @id @default(uuid())
+  repositoryId    String
+  githubPrNumber  Int      // GitHub PR number
+  githubPrId      String   @unique // GitHub PR node ID (GraphQL)
+  title           String
+  author          String   // GitHub username
+  state           String   // open, closed, merged
+  baseBranch      String
+  headBranch      String
+  headSha         String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  repository      Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  reviews         Review[]
+  reviewJobs      ReviewJob[]
+
+  @@unique([repositoryId, githubPrNumber])
+  @@index([repositoryId])
+  @@index([state])
+  @@map("pull_requests")
+}
+
+// ReviewJob represents a queued AI review task
+model ReviewJob {
+  id            String   @id @default(uuid())
+  pullRequestId String
+  userId        String?  // User who triggered (null for auto-triggered)
+  status        String   @default("pending") // pending, processing, completed, failed
+  priority      Int      @default(0) // Higher = more urgent
+  errorMessage  String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime @default(now())
+
+  // Relations
+  pullRequest   PullRequest @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
+  user          User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  review        Review?
+
+  @@index([status])
+  @@index([pullRequestId])
+  @@map("review_jobs")
+}
+
+// Review represents a completed AI review result
+model Review {
+  id            String   @id @default(uuid())
+  tenantId      String
+  pullRequestId String
+  reviewJobId   String   @unique
+  status        String   // completed, partial, error
+  summary       String?  // High-level summary
+  overallScore  Float?   // 0-100 quality score
+  metadata      Json?    // Provider-specific metadata
+  createdAt     DateTime @default(now())
+
+  // Relations
+  tenant        Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pullRequest   PullRequest @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
+  reviewJob     ReviewJob  @relation(fields: [reviewJobId], references: [id], onDelete: Cascade)
+  findings      ReviewFinding[]
+
+  @@index([tenantId])
+  @@index([pullRequestId])
+  @@index([createdAt])
+  @@map("reviews")
+}
+
+// ReviewFinding represents a specific issue or suggestion from AI review
+model ReviewFinding {
+  id          String   @id @default(uuid())
+  reviewId    String
+  category    String   // readability, bug, security, performance, maintainability
+  severity    String   // low, medium, high, critical
+  filePath    String?
+  lineStart   Int?
+  lineEnd     Int?
+  title       String
+  description String
+  suggestion  String?  // Suggested fix or improvement
+  codeSnippet String?  // Relevant code excerpt
+  createdAt   DateTime @default(now())
+
+  // Relations
+  review      Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@index([reviewId])
+  @@index([category, severity])
+  @@map("review_findings")
+}
